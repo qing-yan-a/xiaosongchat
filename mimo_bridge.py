@@ -498,8 +498,13 @@ class MiMoBridge:
                     supplement_message = "你目前是在云端的服务器上，你刚才下载的文件是本地小宋的信息，如果有不一致就按照你的实际情况修改。另外不要把刚才下载的那几个文件备份到tongbu文件夹里"
                     if session_download_url:
                         supplement_message += f"\n\n另外请下载并同步最近的会话记录：\n{session_download_url}"
-                    reply = self.send(supplement_message, timeout=60)
-                    self.logger.info(f"补充说明回复: {reply[:100]}...")
+                    try:
+                        reply = self.send(supplement_message, timeout=120)
+                        self.logger.info(f"补充说明回复: {reply[:100]}...")
+                    except TimeoutError:
+                        self.logger.warning("补充说明消息超时，继续运行...")
+                    except Exception as e:
+                        self.logger.error(f"发送补充说明失败: {e}")
                     
                     self.sync_history.add_record(
                         action="notify",
