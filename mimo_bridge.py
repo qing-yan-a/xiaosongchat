@@ -711,12 +711,45 @@ class MiMoBridge:
         return "".join(self._response_buffer)
 
     def send_local_files(self, message: str, file_paths: list[str], timeout: float = 120) -> str:
+        import mimetypes
+        
         parts = [message, "\n\n--- 附带文件 ---"]
+        download_links = []
+        
         for path in file_paths:
             name = os.path.basename(path)
-            with open(path, "r", encoding="utf-8") as f:
-                content = f.read()
-            parts.append(f"\n\n### {name}\n```\n{content}\n```")
+            
+            # 检测文件MIME类型
+            mime_type, _ = mimetypes.guess_type(path)
+            is_binary = mime_type and not mime_type.startswith("text/")
+            
+            if is_binary:
+                # 二进制文件（图片等）上传到FDS
+                upload_result = self.file_manager.upload_file(path)
+                if upload_result["success"] and upload_result["download_url"]:
+                    download_links.append(upload_result["download_url"])
+                    parts.append(f"\n\n### {name}\n文件类型: {mime_type}\n下载链接: {upload_result['download_url']}")
+                else:
+                    parts.append(f"\n\n### {name}\n上传失败")
+            else:
+                # 文本文件正常读取
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        content = f.read()
+                    parts.append(f"\n\n### {name}\n```\n{content}\n```")
+                except UnicodeDecodeError:
+                    # 如果UTF-8解码失败，也上传到FDS
+                    upload_result = self.file_manager.upload_file(path)
+                    if upload_result["success"] and upload_result["download_url"]:
+                        download_links.append(upload_result["download_url"])
+                        parts.append(f"\n\n### {name}\n下载链接: {upload_result['download_url']}")
+                    else:
+                        parts.append(f"\n\n### {name}\n上传失败")
+        
+        # 如果有下载链接，在消息末尾汇总
+        if download_links:
+            parts.append(f"\n\n--- 下载链接汇总 ---\n" + "\n".join(download_links))
+        
         return self.send("\n".join(parts), timeout=timeout)
 
     def close(self):
