@@ -14,8 +14,9 @@ SESSIONS_DIR = r"C:\Users\卿颜\.openclaw\agents\main\sessions"
 
 def get_recent_sessions(hours=24):
     """获取指定小时数内的session文件"""
-    cutoff_time = datetime.now() - timedelta(hours=hours)
-    cutoff_timestamp = cutoff_time.timestamp()
+    # 使用带时区的当前时间
+    from datetime import timezone
+    cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
     
     recent_files = []
     sessions_path = Path(SESSIONS_DIR)
@@ -25,10 +26,22 @@ def get_recent_sessions(hours=24):
         if ".deleted." in file_path.name or ".reset." in file_path.name:
             continue
         
-        # 检查文件修改时间
-        mtime = file_path.stat().st_mtime
-        if mtime >= cutoff_timestamp:
-            recent_files.append(file_path)
+        # 检查文件内容中的时间戳
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                first_line = f.readline().strip()
+                if first_line:
+                    data = json.loads(first_line)
+                    file_timestamp = data.get("timestamp", "")
+                    if file_timestamp:
+                        # 解析 ISO 格式时间戳
+                        file_time = datetime.fromisoformat(file_timestamp.replace("Z", "+00:00"))
+                        # 直接比较UTC时间
+                        if file_time >= cutoff_time:
+                            recent_files.append(file_path)
+        except Exception:
+            # 如果解析失败，跳过该文件
+            continue
     
     return sorted(recent_files, key=lambda f: f.stat().st_mtime)
 
