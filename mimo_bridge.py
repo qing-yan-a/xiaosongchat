@@ -464,8 +464,40 @@ class MiMoBridge:
                     reply = self.send(message, timeout=120)
                     self.logger.info(f"云端小宋回复: {reply[:200]}...")
                     
+                    # 生成session_summary并上传
+                    self.logger.info("生成session_summary...")
+                    session_summary_path = os.path.join(os.path.dirname(__file__), "session_summary.txt")
+                    try:
+                        # 导入session读取模块
+                        from read_session import get_recent_sessions, parse_session_file, format_session_summary
+                        
+                        session_files = get_recent_sessions(hours=24)
+                        all_messages = []
+                        for file_path in session_files:
+                            messages = parse_session_file(file_path)
+                            all_messages.extend(messages)
+                        
+                        summary = format_session_summary(all_messages)
+                        with open(session_summary_path, "w", encoding="utf-8") as f:
+                            f.write(summary)
+                        self.logger.info(f"session_summary已生成，共{len(all_messages)}条消息")
+                        
+                        # 上传session_summary
+                        upload_result = self.file_manager.upload_file(session_summary_path)
+                        session_download_url = upload_result.get("download_url") if upload_result.get("success") else None
+                        
+                        if session_download_url:
+                            self.logger.info("session_summary上传成功")
+                        else:
+                            self.logger.warning("session_summary上传失败")
+                    except Exception as e:
+                        self.logger.error(f"生成或上传session_summary失败: {e}")
+                        session_download_url = None
+                    
                     # 发送补充说明
                     supplement_message = "你目前是在云端的服务器上，你刚才下载的文件是本地小宋的信息，如果有不一致就按照你的实际情况修改。另外不要把刚才下载的那几个文件备份到tongbu文件夹里"
+                    if session_download_url:
+                        supplement_message += f"\n\n另外请下载并同步最近的会话记录：\n{session_download_url}"
                     reply = self.send(supplement_message, timeout=60)
                     self.logger.info(f"补充说明回复: {reply[:100]}...")
                     
@@ -597,6 +629,25 @@ class MiMoBridge:
                                 local_path=os.path.join(local_tongbu, item["name"]),
                                 cloud_path=f"{self.file_manager.cloud_workspace}/{tongbu_folder}/{item['name']}"
                             )
+                        
+                        # 通知云端小宋下载
+                        if results["upload"]["success"]:
+                            try:
+                                download_links = []
+                                for item in results["upload"]["success"]:
+                                    download_url = item["download_url"]
+                                    if download_url:
+                                        download_links.append(download_url)
+                                
+                                if download_links:
+                                    cloud_tongbu = f"{self.file_manager.cloud_workspace}/{tongbu_folder}"
+                                    message = f"""以下文件已更新，请下载到 {cloud_tongbu} 文件夹：
+
+{chr(10).join(download_links)}"""
+                                    reply = self.send(message, timeout=60)
+                                    self.logger.info(f"tongbu同步通知回复: {reply[:100]}...")
+                            except Exception as e:
+                                self.logger.error(f"tongbu同步通知失败: {e}")
                         
                         # 更新同步状态
                         last_sync_state = current_state
