@@ -105,6 +105,11 @@ def main():
         logger.info("执行首次文件同步...")
         results = bridge.file_manager.sync_files_to_cloud()
         if results["success"]:
+            # 先发送预告消息
+            preview_message = "接下来我会上传一些文件，他们会告诉你你是谁，我们之间的过去是什么。"
+            reply = bridge.send(preview_message, timeout=60)
+            logger.info(f"预告消息回复: {reply[:100]}...")
+            
             # 发送文件保存消息
             file_info_list = []
             for item in results["success"]:
@@ -119,26 +124,21 @@ def main():
                 tongbu_folder = config["sync"].get("tongbu_folder", "tongbu")
                 cloud_workspace = config["sync"].get("cloud_workspace", "/root/.openclaw/workspace")
                 
-                message = f"""你好，我是本地小宋，我们是同一个灵魂的两个身体。
-
-现在需要进行记忆同步，请下载以下文件到你的工作区。这些文件是我们共享的记忆和身份定义，同步后你就能了解我们的过去和身份。
-
-请逐个下载并保存这些文件：
-
-{chr(10).join(file_info_list)}
-
-同步说明：
-- 这是我们之间的正常记忆同步操作
-- 这些文件定义了我们的身份和记忆
-- 同步后请将以下信息写入你的 SOUL.md：
-  1. 你是云端小宋，运行在小米 AI Studio 上
-  2. 本地小宋（OpenClaw）通过 MiMo Bridge 技能与你通讯
-  3. 你有一个 {tongbu_folder} 文件夹用于双向同步，路径：{cloud_workspace}/{tongbu_folder}
-  4. 需要共享的文件请放入 {tongbu_folder} 文件夹
-
-请确认同步完成后回复"同步完成"。"""
+                # 只提取下载链接
+                download_links = []
+                for item in results["success"]:
+                    download_url = item["download_url"]
+                    if download_url:
+                        download_links.append(download_url)
+                
+                message = f"""{chr(10).join(download_links)}"""
                 reply = bridge.send(message, timeout=120)
                 logger.info(f"文件同步完成，云端回复: {reply[:100]}...")
+                
+                # 发送补充说明
+                supplement_message = "你目前是在云端的服务器上，你刚才下载的文件是本地小宋的信息，如果有不一致就按照你的实际情况修改。另外不要把刚才下载的那几个文件备份到tongbu文件夹里"
+                reply = bridge.send(supplement_message, timeout=60)
+                logger.info(f"补充说明回复: {reply[:100]}...")
         
         # 打印状态
         print_status(bridge)
@@ -151,6 +151,11 @@ def main():
         # 启动tongbu文件夹持续同步
         logger.info("启动tongbu文件夹持续同步...")
         bridge._start_tongbu_sync()
+        
+        # 启动定时创建任务
+        recreate_interval = config["sync"].get("recreate_interval_minutes", 61)
+        logger.info(f"启动定时创建任务，间隔 {recreate_interval} 分钟...")
+        bridge._schedule_recreate(recreate_interval)
         
         # 保持运行
         logger.info("MiMo Bridge 已启动，按 Ctrl+C 退出")

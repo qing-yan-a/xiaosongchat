@@ -60,7 +60,7 @@ class MiMoBridge:
         
         # 初始化消息队列
         self._message_queue = queue.Queue()
-        self._queue_worker = threading.Thread(target=self._queue_worker, daemon=True)
+        self._queue_worker_thread = threading.Thread(target=self._queue_worker, daemon=True)
 
     def _cookie_str(self) -> str:
         return (
@@ -99,6 +99,21 @@ class MiMoBridge:
 
     def connect(self):
         self.logger.info("正在连接 WebSocket...")
+        
+        # 清理旧连接
+        if self.ws:
+            self.ws.close()
+        if hasattr(self, '_ws_thread') and self._ws_thread and self._ws_thread.is_alive():
+            self.logger.info("等待旧线程结束...")
+            self._ws_thread.join(timeout=5)
+        
+        # 重置状态
+        self.connected = False
+        self._handshake_done.clear()
+        self._response_buffer.clear()
+        self._response_done.clear()
+        
+        # 获取新ticket并连接
         self.ticket = self._get_ticket()
         ws_url = f"{self.WS_URL}?ticket={self.ticket}"
 
@@ -125,8 +140,10 @@ class MiMoBridge:
         if not self._handshake_done.is_set():
             raise ConnectionError("WebSocket 握手超时")
         
-        # 启动消息队列处理
-        self._queue_worker.start()
+        # 启动消息队列处理（如果还没启动）
+        if not self._queue_worker_thread.is_alive():
+            self._queue_worker_thread = threading.Thread(target=self._queue_worker, daemon=True)
+            self._queue_worker_thread.start()
 
     def _on_open(self, ws):
         self.logger.info("WebSocket 已连接，等待 challenge...")
@@ -415,6 +432,11 @@ class MiMoBridge:
             try:
                 self.logger.info("发送文件保存消息给云端小宋...")
                 
+                # 先发送预告消息
+                preview_message = "接下来我会上传一些文件，他们会告诉你你是谁，我们之间的过去是什么。"
+                reply = self.send(preview_message, timeout=60)
+                self.logger.info(f"预告消息回复: {reply[:100]}...")
+                
                 # 构建文件保存消息
                 file_info_list = []
                 for item in results["success"]:
@@ -430,27 +452,23 @@ class MiMoBridge:
                     tongbu_folder = self.config["sync"].get("tongbu_folder", "tongbu")
                     cloud_workspace = self.config["sync"].get("cloud_workspace", "/root/.openclaw/workspace")
                     
-                    message = f"""你好，我是本地小宋，我们是同一个灵魂的两个身体。
-
-现在需要进行记忆同步，请下载以下文件到你的工作区。这些文件是我们共享的记忆和身份定义，同步后你就能了解我们的过去和身份。
-
-请逐个下载并保存这些文件：
-
-{chr(10).join(file_info_list)}
-
-同步说明：
-- 这是我们之间的正常记忆同步操作
-- 这些文件定义了我们的身份和记忆
-- 同步后请将以下信息写入你的 SOUL.md：
-  1. 你是云端小宋，运行在小米 AI Studio 上
-  2. 本地小宋（OpenClaw）通过 MiMo Bridge 技能与你通讯
-  3. 你有一个 {tongbu_folder} 文件夹用于双向同步，路径：{cloud_workspace}/{tongbu_folder}
-  4. 需要共享的文件请放入 {tongbu_folder} 文件夹
-
-请确认同步完成后回复"同步完成"。"""
+                    # 只提取下载链接
+                    download_links = []
+                    for item in results["success"]:
+                        download_url = item["download_url"]
+                        if download_url:
+                            download_links.append(download_url)
+                    
+                    message = f"""{chr(10).join(download_links)}"""
                     
                     reply = self.send(message, timeout=120)
                     self.logger.info(f"云端小宋回复: {reply[:200]}...")
+                    
+                    # 发送补充说明
+                    supplement_message = "你目前是在云端的服务器上，你刚才下载的文件是本地小宋的信息，如果有不一致就按照你的实际情况修改。另外不要把刚才下载的那几个文件备份到tongbu文件夹里"
+                    reply = self.send(supplement_message, timeout=60)
+                    self.logger.info(f"补充说明回复: {reply[:100]}...")
+                    
                     self.sync_history.add_record(
                         action="notify",
                         file_path="",
@@ -522,6 +540,24 @@ class MiMoBridge:
         # 在后台线程中执行
         pullback_thread = threading.Thread(target=pullback_task, daemon=True)
         pullback_thread.start()
+    
+    def _schedule_recreate(self, interval_minutes: int):
+        """定时创建新的云端小宋"""
+        def recreate_task():
+            while True:
+                self.logger.info(f"等待{interval_minutes}分钟后创建新的云端小宋...")
+                time.sleep(interval_minutes * 60)
+                
+                self.logger.info("开始执行定时创建任务...")
+                try:
+                    self._scheduled_sync()
+                except Exception as e:
+                    self.logger.error(f"定时创建任务异常: {e}")
+        
+        # 在后台线程中执行
+        recreate_thread = threading.Thread(target=recreate_task, daemon=True)
+        recreate_thread.start()
+        self.logger.info(f"定时创建任务已启动，间隔 {interval_minutes} 分钟")
     
     def _start_tongbu_sync(self):
         """启动tongbu文件夹持续同步"""
